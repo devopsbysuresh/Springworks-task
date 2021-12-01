@@ -1,0 +1,33 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      java: openjdk11
+
+    commands:
+      - apt-get update -y
+      - apt-get install -y maven
+      - pip3 install --upgrade awscli
+
+  pre_build:
+    commands:
+      - sonar_host_url=""
+      - sonar_project_key="$REPOSITORY_NAME"
+      - sonar_username=$(aws secretsmanager get-secret-value --secret-id $SONARQUBE_USER_CREDENTIAL_SECRET | jq -r '.SecretString' | jq -r '.username')
+      - sonar_password=$(aws secretsmanager get-secret-value --secret-id $SONARQUBE_USER_CREDENTIAL_SECRET | jq -r '.SecretString' | jq -r '.password')
+      - git checkout $SOURCE_COMMIT
+
+  build:
+    commands:
+      - builStatus=$(mvn install)
+      - result=$(mvn clean sonar:sonar -Dsonar.projectKey=$sonar_project_key -Dsonar.host.url=$sonar_host_url -Dsonar.login=$sonar_username -Dsonar.password=$sonar_password)
+      - echo $result
+
+  post_build:
+    commands:
+      - echo $buildStatus
+      - buildComment=$(echo "Status of project build phase : $buildStatus")
+      - aws codecommit post-comment-for-pull-request --pull-request-id $PULL_REQUEST_ID --repository-name $REPOSITORY_NAME --before-commit-id $DESTINATION_COMMIT --after-commit-id $SOURCE_COMMIT --content "$buildComment"
+      - sonar_link=$(echo $result | egrep -o "you can browse http://[^, ]+")
+      - sonar_task_id=$(echo $result | egrep -o "task\?id=[^ ]+" | cut -d'=' -f2)
